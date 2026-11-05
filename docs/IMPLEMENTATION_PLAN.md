@@ -336,12 +336,13 @@ To be specified in `docs/SCORING.md`:
 | Task 2 — Implementation plan + traceability | ✅ Draft (this document) |
 | Task 3 — ERD + tenant isolation proposal | ✅ Draft — `docs/DATABASE.md` |
 | Task 4 — Metric contract + scoring config | ✅ Draft — `docs/SCORING.md` |
-| Milestone 1 — Foundation | 🚫 Blocked on design review of Tasks 3–4 |
-| Milestones 2–7 | 🚫 Not started |
+| Milestone 1 — Foundation | ✅ Complete — `docs/milestones/M1.md` |
+| Milestone 2 — Identity, tenants, RBAC, RLS | 🔜 Next |
+| Milestones 3–7 | 🚫 Not started |
 
 **Confirmed:** D2 = password fallback + OIDC adapter; D4 = labeled manual
-LeetCode evidence in V1.
+LeetCode evidence in V1; D11 = `pyproject.toml` + venv/pip; D12 = Vite + React
++ TypeScript.
 
-**Blocked on:** review of `docs/DATABASE.md` and `docs/SCORING.md`; of the
-remaining decisions, only D11 (Python tooling) and D12 (frontend build tool)
-block Milestone 1 directly. D1/D5/D6/D9/D10 block their respective milestones.
+**Blocked on:** nothing for Milestone 2. D1/D5/D6/D9/D10 are resolved by the
+design documents but must be re-checked before the milestones they gate.
