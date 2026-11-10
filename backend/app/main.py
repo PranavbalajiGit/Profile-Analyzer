@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import database  # noqa: F401  (register ORM models for metadata)
 from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.exceptions import (
