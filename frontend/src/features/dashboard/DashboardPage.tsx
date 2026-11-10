@@ -1,118 +1,102 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 
-import { fetchHealth } from "../../services/api";
+import { ErrorBanner, LoadingBlock } from "../../components/ui/Feedback";
+import { PageHeader } from "../../components/ui/PageHeader";
+import {
+  badgeClass,
+  cardClass,
+  secondaryButtonClass,
+} from "../../components/ui/styles";
+import { errorMessage } from "../../lib/format";
+import { roleLabel } from "../../lib/roles";
+import { studentsApi } from "../../services/api";
+import type { Student } from "../../types/api";
+import { useAuth } from "../auth/AuthContext";
 
-const stack = [
-  "Python + FastAPI",
-  "PostgreSQL + SQLAlchemy + Alembic",
-  "Redis + Celery",
-  "React + TypeScript + Tailwind",
-];
-
-const nextMilestones = [
-  { id: "M2", label: "Identity, tenants, departments, batches, RBAC" },
-  { id: "M3", label: "Profile submission and mentor verification" },
-  { id: "M4", label: "Codeforces and GitHub connectors, async sync" },
-  { id: "M5", label: "Versioned scoring, coverage, rankings" },
-];
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs font-medium uppercase tracking-wider text-slate-500">{label}</dt>
+      <dd className="mt-1 text-sm font-medium text-slate-900">{value}</dd>
+    </div>
+  );
+}
 
 export function DashboardPage() {
-  const health = useQuery({
-    queryKey: ["health"],
-    queryFn: fetchHealth,
-    refetchInterval: 30_000,
+  const { user } = useAuth();
+  const student = useQuery<Student>({
+    queryKey: ["students", "me"],
+    queryFn: studentsApi.me,
+    retry: false,
   });
-
-  const backendState = health.isPending
-    ? "Checking…"
-    : health.isSuccess
-      ? `Connected · v${health.data.version}`
-      : "Not reachable";
 
   return (
     <div className="space-y-8">
-      <section>
-        <p className="text-xs font-semibold uppercase tracking-wider text-brand-700">
-          Milestone 1
-        </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">
-          Foundation is in place
-        </h1>
-        <p className="mt-2 max-w-2xl text-sm text-slate-600">
-          This shell proves the frontend, API, database migrations, and worker wiring. Business
-          modules start at Milestone 2, after identity and tenant boundaries.
-        </p>
-      </section>
+      <PageHeader
+        eyebrow="Student workspace"
+        title={`Welcome, ${user?.display_name ?? "student"}`}
+        description="Your institution profile and account state. Profile evidence and verified platform links arrive in Milestone 3."
+        actions={
+          <Link to="/student/profile" className={secondaryButtonClass}>
+            Edit display details
+          </Link>
+        }
+      />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-medium text-slate-500">Backend API</h2>
-          <p className="mt-2 text-lg font-semibold text-slate-900">{backendState}</p>
-          <p className="mt-1 text-xs text-slate-500">
-            {health.isSuccess ? (
-              <>
-                {health.data.name} · {health.data.environment}
-              </>
-            ) : (
-              "Start the API with docker compose up, or uvicorn in backend/."
-            )}
-          </p>
-        </article>
+      {student.isError ? <ErrorBanner message={errorMessage(student.error)} /> : null}
+      {student.isPending ? <LoadingBlock label="Loading your student record…" /> : null}
 
-        <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-medium text-slate-500">API surface</h2>
-          <p className="mt-2 text-lg font-semibold text-slate-900">/api/v1</p>
-          <p className="mt-1 text-xs text-slate-500">
-            Health, readiness, request IDs, structured logs, error envelope.
-          </p>
-        </article>
+      {student.isSuccess ? (
+        <section className={`${cardClass} p-6`}>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">
+                {student.data.display_name}
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">{student.data.email}</p>
+            </div>
+            <span className={badgeClass}>{student.data.status}</span>
+          </div>
 
-        <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-medium text-slate-500">Evidence policy</h2>
-          <p className="mt-2 text-lg font-semibold text-slate-900">Missing ≠ zero</p>
-          <p className="mt-1 text-xs text-slate-500">
-            Coverage is reported separately from performance in Milestone 5.
-          </p>
-        </article>
-      </div>
+          <dl className="mt-6 grid gap-5 border-t border-slate-100 pt-5 sm:grid-cols-2 lg:grid-cols-4">
+            <Detail label="Register number" value={student.data.register_number} />
+            <Detail label="Department" value={student.data.department_name} />
+            <Detail label="Batch" value={student.data.batch_name} />
+            <Detail
+              label="Current year"
+              value={student.data.current_year ? String(student.data.current_year) : "Not set"}
+            />
+          </dl>
+        </section>
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-base font-semibold text-slate-900">Stack</h2>
-          <ul className="mt-4 space-y-2">
-            {stack.map((item) => (
-              <li key={item} className="flex items-start gap-3 text-sm text-slate-700">
-                <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-brand-600" />
-                {item}
-              </li>
-            ))}
-          </ul>
+        <section className={`${cardClass} p-6`}>
+          <h2 className="text-base font-semibold text-slate-900">Account</h2>
+          <dl className="mt-4 space-y-4">
+            <Detail label="Institution" value={user?.college_name ?? "—"} />
+            <Detail label="Institution code" value={user?.college_code ?? "—"} />
+            <Detail
+              label="Roles"
+              value={(user?.roles ?? []).map(roleLabel).join(", ") || "—"}
+            />
+          </dl>
         </section>
 
-        <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-base font-semibold text-slate-900">Next milestones</h2>
-          <ul className="mt-4 divide-y divide-slate-100">
-            {nextMilestones.map((milestone) => (
-              <li key={milestone.id} className="flex gap-3 py-2.5 text-sm">
-                <span className="w-8 shrink-0 font-mono text-xs font-semibold text-brand-700">
-                  {milestone.id}
-                </span>
-                <span className="text-slate-700">{milestone.label}</span>
-              </li>
-            ))}
+        <section className={`${cardClass} p-6`}>
+          <h2 className="text-base font-semibold text-slate-900">What comes next</h2>
+          <ul className="mt-4 space-y-3 text-sm text-slate-700">
+            <li>Milestone 3 · Profile submission, evidence, mentor verification.</li>
+            <li>Milestone 4 · Codeforces and GitHub connectors with async sync.</li>
+            <li>Milestone 5 · Versioned scoring, coverage and rankings.</li>
           </ul>
+          <p className="mt-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
+            Missing evidence is reported as unknown, never as zero. Approved platform profiles
+            become read-only.
+          </p>
         </section>
       </div>
-
-      <section className="rounded-xl border border-slate-200 bg-slate-900 p-6 text-slate-100 shadow-sm">
-        <h2 className="text-base font-semibold">Security boundaries from day one</h2>
-        <ul className="mt-3 grid gap-2 text-sm text-slate-300 sm:grid-cols-2">
-          <li>Tenant comes from the authenticated context, never the client.</li>
-          <li>PostgreSQL RLS will back up application-level scoping.</li>
-          <li>Approved platform profiles become read-only for students.</li>
-          <li>No scraping, no undocumented endpoints, no fabricated metrics.</li>
-        </ul>
-      </section>
     </div>
   );
 }

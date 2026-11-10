@@ -10,10 +10,10 @@ export function NotFoundPage() {
           That route does not exist in this milestone.
         </p>
         <Link
-          to="/student/dashboard"
+          to="/"
           className="mt-6 inline-flex items-center justify-center rounded-md bg-brand-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-brand-700"
         >
-          Back to dashboard
+          Back to your workspace
         </Link>
       </section>
     </main>
