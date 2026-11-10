@@ -34,6 +34,12 @@ class AppError(Exception):
         super().__init__(self.message)
 
 
+class UnauthorizedError(AppError):
+    status_code = 401
+    code = "unauthenticated"
+    message = "Authentication is required."
+
+
 class NotFoundError(AppError):
     status_code = 404
     code = "not_found"
@@ -44,6 +50,24 @@ class PermissionDeniedError(AppError):
     status_code = 403
     code = "permission_denied"
     message = "You do not have permission to perform this action."
+
+
+class ConflictError(AppError):
+    status_code = 409
+    code = "conflict"
+    message = "The request conflicts with the current state."
+
+
+class LockedError(AppError):
+    status_code = 423
+    code = "account_locked"
+    message = "The account is temporarily locked. Try again later."
+
+
+class ServiceUnavailableError(AppError):
+    status_code = 503
+    code = "service_unavailable"
+    message = "The requested capability is not configured."
 
 
 def error_payload(

@@ -14,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_APP_DB_CREDENTIAL = "profile_app:profile_app"
 DEFAULT_OWNER_DB_CREDENTIAL = "profile_owner:profile_owner"
+DEFAULT_JWT_SECRET = "dev-insecure-jwt-secret-change-me"
 
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 
@@ -27,7 +28,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Profile Analyzer"
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
     environment: Literal["development", "test", "staging", "production"] = "development"
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
@@ -51,6 +52,26 @@ class Settings(BaseSettings):
     log_json: bool = True
 
     cors_origins: list[str] = []
+    frontend_base_url: str = "http://localhost:5173"
+
+    # Session handling (opaque session ID inside a signed JWT cookie).
+    session_cookie_name: str = "pa_session"
+    session_ttl_minutes: int = 480
+    jwt_secret: str = DEFAULT_JWT_SECRET
+    jwt_issuer: str = "profile-analyzer"
+    cookie_secure: bool = False
+
+    # Password fallback (FR-08).
+    login_max_failures: int = 5
+    login_lockout_minutes: int = 15
+
+    # OIDC adapter (FR-01/02). Values are supplied at deploy time.
+    oidc_enabled: bool = False
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: str | None = None
+    oidc_redirect_uri: str = "http://localhost:8000/api/v1/auth/callback"
+    oidc_scopes: str = "openid email profile"
 
     @field_validator("log_level")
     @classmethod
@@ -78,6 +99,12 @@ class Settings(BaseSettings):
             raise ValueError("the default application database credentials are not allowed")
         if DEFAULT_OWNER_DB_CREDENTIAL in self.migration_database_url:
             raise ValueError("the default migration database credentials are not allowed")
+        if self.jwt_secret == DEFAULT_JWT_SECRET:
+            raise ValueError("the default JWT secret is not allowed")
+        if not self.cookie_secure:
+            raise ValueError("session cookies must be Secure in production")
+        if self.oidc_enabled and (not self.oidc_issuer or not self.oidc_client_id):
+            raise ValueError("oidc_issuer and oidc_client_id are required when OIDC is enabled")
         return self
 
     @property
