@@ -1,7 +1,8 @@
 # Implementation Plan — Profile Analyzer V1
 
 **Source of truth:** `README.md` (product + architecture specification, §1–§23).
-**Status:** Draft for review. No application code has been written yet.
+**Status:** Milestone 1 (foundation) and Milestone 2 (identity, institution,
+RBAC, RLS) are implemented. Milestone 3 is next.
 **Working rule:** a requirement is not "done" until its tests pass and the
 result is reproducible.
 
@@ -217,25 +218,25 @@ interfaces, never arbitrary table access.
 
 ---
 
-## 7. Database and tenant-isolation approach (README Task 3 — proposed, not yet implemented)
+## 7. Database and tenant-isolation approach (README Task 3 — implemented in M2)
 
 **Strategy:** shared database, `college_id` on every tenant-owned table, with
 PostgreSQL RLS as defense in depth.
 
-Proposed mechanisms to be documented in `docs/DATABASE.md` before migrations:
+Implemented mechanisms (see `docs/DATABASE.md` for the exact schema):
 
 1. Every tenant-owned table carries a non-null `college_id UUID`.
 2. Composite unique keys: `(college_id, register_number)`,
-   `(college_id, institutional_email)`, `(college_id, platform_id,
-   normalized_username)`.
+   `(college_id, email)`, and scoped `(college_id, code)` on departments/batches.
 3. Composite foreign keys (e.g. `(department_id, college_id)` referencing
    `departments(id, college_id)`) so relationships cannot cross tenants.
-4. Application sets `app.current_college_id` per transaction with `SET LOCAL`;
-   policies use `USING (college_id = current_setting('app.current_college_id')::uuid)`.
-5. Application connects with a non-owner, non-superuser role that does not
-   bypass RLS.
-6. A dedicated "system" context for cross-tenant jobs, minimized and audited.
-7. Every table gets indices on `college_id` plus frequent filter columns.
+4. Application sets `app.current_college_id` per transaction with `set_config(...,
+   true)`; policies compare `college_id` to that setting.
+5. Application connects with the non-owner `profile_app` role, which does not
+   bypass RLS; migrations run as `profile_owner`.
+6. A narrow `app.is_system` flag widens only the `colleges` policy, for
+   provisioning and login lookup.
+7. Every tenant table has `college_id` indexes plus frequent filter indexes.
 
 **Global account claiming** (README §8): a profile account claimed in college A
 may also exist as a string in college B. If global uniqueness becomes a
@@ -244,8 +245,8 @@ the tenant-scoped unique key enforces global ownership. This is decision D3.
 
 **Proposed ERD groups** follow README §9 exactly (institution/identity,
 profiles/verification, metrics/sync, scoring/rankings, administration). The
-concrete diagram, columns, keys, and indexes will be delivered as
-`docs/DATABASE.md` for approval before the first domain migration.
+institution/identity group and its RLS policies are implemented and documented
+in `docs/DATABASE.md`; the remaining groups are still proposals.
 
 ---
 
@@ -273,7 +274,7 @@ To be specified in `docs/SCORING.md`:
 
 | ID | Decision | Blocks | Recommendation |
 | --- | --- | --- | --- |
-| D1 | OIDC provider details (issuer, claim mapping, role claims) | M2 | Build a provider-agnostic OIDC adapter; configure real values at deploy time |
+| D1 | OIDC provider details (issuer, claim mapping, role claims) | M2 | ✅ Adapter built; provider-agnostic, configured at deploy time |
 | D2 | Development authentication | M2 | Local email+password fallback (FR-08) with seeded synthetic users; OIDC behind config |
 | D3 | Global platform-account uniqueness | M3 | Tenant-scoped only in V1; document the gap |
 | D4 | LeetCode data access | M4 | Ship a labeled manual-evidence fallback first; automate only with an approved API |
@@ -281,10 +282,10 @@ To be specified in `docs/SCORING.md`:
 | D6 | Notification transport | M3 | In-app first; email adapter behind an interface |
 | D7 | Retention/deletion policy | M7 | Placeholder config; must be institution-approved |
 | D8 | Hosting target | M7 | Docker Compose on college/cloud VM; decide with institution |
-| D9 | Batch semantics (admission year vs graduation year) | M2 | Model both `start_year` and `end_year` |
-| D10 | Bulk import format | M2 | CSV first, Excel via the same parser |
-| D11 | Python project tooling | M1 | `pyproject.toml` + lockfile (uv/pip-tools) unless team prefers `requirements.txt` |
-| D12 | Frontend build tool | M1 | Vite + React + TypeScript |
+| D9 | Batch semantics (admission year vs graduation year) | M2 | ✅ Both `start_year` and `end_year` stored |
+| D10 | Bulk import format | M2 | ✅ CSV first, Excel via the same parser |
+| D11 | Python project tooling | M1 | ✅ `pyproject.toml` + venv/pip (no `uv` on the dev machine) |
+| D12 | Frontend build tool | M1 | ✅ Vite + React + TypeScript |
 
 ---
 
@@ -337,12 +338,15 @@ To be specified in `docs/SCORING.md`:
 | Task 3 — ERD + tenant isolation proposal | ✅ Draft — `docs/DATABASE.md` |
 | Task 4 — Metric contract + scoring config | ✅ Draft — `docs/SCORING.md` |
 | Milestone 1 — Foundation | ✅ Complete — `docs/milestones/M1.md` |
-| Milestone 2 — Identity, tenants, RBAC, RLS | 🔜 Next |
-| Milestones 3–7 | 🚫 Not started |
+| Milestone 2 — Identity, tenants, RBAC, RLS | ✅ Complete — `docs/milestones/M2.md` |
+| Milestone 3 — Profiles & verification | 🔜 Next |
+| Milestones 4–7 | 🚫 Not started |
 
-**Confirmed:** D2 = password fallback + OIDC adapter; D4 = labeled manual
-LeetCode evidence in V1; D11 = `pyproject.toml` + venv/pip; D12 = Vite + React
-+ TypeScript.
+**Confirmed:** D1 = provider-agnostic OIDC adapter with configured issuer;
+D2 = password fallback + OIDC adapter; D4 = labeled manual LeetCode evidence in
+V1; D9 = both `start_year` and `end_year`; D10 = CSV first, Excel via the same
+parser; D11 = `pyproject.toml` + venv/pip; D12 = Vite + React + TypeScript.
 
-**Blocked on:** nothing for Milestone 2. D1/D5/D6/D9/D10 are resolved by the
-design documents but must be re-checked before the milestones they gate.
+**Blocked on:** nothing for Milestone 3. D3 (global account uniqueness), D5
+(normalization curves), D6 (notification transport), D7 (retention) and D8
+(hosting) are resolved or re-checked in the milestones they gate.

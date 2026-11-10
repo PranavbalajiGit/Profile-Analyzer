@@ -1,6 +1,8 @@
 # Architecture
 
-**Status:** Milestone 1 (foundation). Business modules are added from M2 onward.
+**Status:** Milestone 2 (identity, institution administration, RBAC, RLS).
+Authentication, tenant provisioning, institution CRUD, student self-service and
+audit logging are implemented; platform/scoring/ranking modules follow.
 **Related:** `docs/IMPLEMENTATION_PLAN.md`, `docs/DATABASE.md`, `docs/SCORING.md`.
 
 ---
@@ -50,6 +52,29 @@ backend/app/
 Later milestones add `modules/<domain>/` with only the layers each domain
 needs (`models`, `schemas`, `repository`, `service`, `router`).
 
+M2 adds:
+
+```text
+backend/app/
+  core/
+    security.py     Argon2id password hashing, session JWT sign/verify
+    permissions.py  role catalogue and permission checks
+    tenant.py       tenant + system scope, fail-closed context
+  modules/
+    identity/       colleges, users, roles, user_sessions + schemas
+    auth/           login/logout/session resolution, OIDC adapter,
+                    password fallback, `/auth` router + dependencies
+    institution/    departments, batches, students, mentors,
+                    mentor_batch_assignments ORM models
+    admin/          admin service, CSV/Excel importer, `/admin` router
+    students/       student queries, self-service service, `/students` router
+    audit/          append-only audit log model + service
+```
+
+Dependency direction is one-way: routers → services → queries/models.
+Cross-cutting concerns (tenant scope, auditing, permissions) are passed in
+explicitly, not imported sideways between domain modules.
+
 ---
 
 ## 3. Request lifecycle
@@ -67,11 +92,17 @@ HTTP request
 
 Rules:
 
-- Tenant identity is resolved from the authenticated session only.
+- Tenant identity is resolved from the authenticated session only. A
+  client-supplied `college_id` is never trusted; only the platform
+  `SUPER_ADMIN` path may act on another tenant through explicit provisioning
+  endpoints.
 - `apply_tenant()` uses `set_config(..., true)`, so it is transaction-local and
-  cannot leak through the connection pool.
+  cannot leak through the connection pool. It is re-applied after any commit.
+- The request session resolves a signed JWT (in the `pa_session` HttpOnly
+  cookie) to a non-revoked `user_sessions` row before the identity is trusted.
 - Repository queries always filter by tenant; RLS is the second layer.
-- Missing tenant context raises before any query.
+- Missing tenant context raises before any query. The single exception is the
+  narrow `colleges` system policy used for provisioning and login lookup.
 
 ---
 
@@ -94,15 +125,33 @@ credentials at startup.
 
 ```text
 frontend/src/
-  app/            router, providers (TanStack Query)
-  components/     layout and reusable UI
-  features/       auth, dashboard, (students, profiles, ... in later milestones)
+  app/            router, providers (TanStack Query), route guards
+  components/     layout (AppShell), reusable UI, shared styles
+  features/       auth, dashboard, students, admin, profile
   services/       typed API client
   types/          API contracts
+  lib/            formatting helpers, debounce hook
   styles/         Tailwind entry
 ```
 
-Route guards are a UX convenience only; the backend authorizes every action.
+M2 pages:
+
+| Area | Route | Roles |
+| --- | --- | --- |
+| Login | `/login` | anonymous |
+| Student dashboard | `/student/dashboard` | STUDENT |
+| My profile | `/student/profile` | STUDENT |
+| Students list | `/students` | MENTOR, PLACEMENT_COORDINATOR, admins |
+| Departments | `/admin/departments` | COLLEGE_ADMIN, SUPER_ADMIN |
+| Batches | `/admin/batches` | COLLEGE_ADMIN, SUPER_ADMIN |
+| Mentors | `/admin/mentors` | COLLEGE_ADMIN, SUPER_ADMIN |
+| Import | `/admin/import` | COLLEGE_ADMIN, SUPER_ADMIN |
+| Audit log | `/admin/audit` | COLLEGE_ADMIN, SUPER_ADMIN |
+| Colleges | `/admin/colleges` | SUPER_ADMIN |
+
+The shell renders navigation from the authenticated role list returned by
+`/auth/me`. Route guards are a UX convenience only; the backend authorizes every
+action.
 
 ---
 
@@ -119,7 +168,8 @@ Route guards are a UX convenience only; the backend authorizes every action.
 
 ## 7. Deferred by design
 
-- RLS policies and domain tables → M2.
-- Authentication (OIDC + password fallback) → M2.
+- Platform accounts, connectors, profile submissions and verification → M3.
 - Celery queues beyond wiring → M4.
+- Scoring/ranking modules → M5.
+- Notifications, exports and notifications UI → M6.
 - Monitoring stack (Prometheus/Grafana), Nginx TLS, backups → M7.
