@@ -50,7 +50,8 @@ def test_apply_tenant_uses_transaction_local_setting() -> None:
 
     assert applied == college_id
     assert str(SET_TENANT_SQL) == (
-        "SELECT set_config('app.current_college_id', :college_id, true)"
+        "SELECT set_config('app.current_college_id', :college_id, true), "
+        "set_config('app.is_system', 'false', true)"
     )
     assert session.calls == [(str(SET_TENANT_SQL), {"college_id": str(college_id)})]
 

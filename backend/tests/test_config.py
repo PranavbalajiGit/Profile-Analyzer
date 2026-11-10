@@ -51,7 +51,27 @@ def test_production_accepts_hardened_settings() -> None:
         debug=False,
         database_url="postgresql+psycopg://svc:strong@db.internal:5432/app",
         migration_database_url="postgresql+psycopg://owner:strong@db.internal:5432/app",
+        jwt_secret="a-strong-production-secret-value",
+        cookie_secure=True,
         log_json=True,
     )
 
     assert settings.is_production is True
+
+
+def test_production_rejects_insecure_session_settings() -> None:
+    base = {
+        "_env_file": None,
+        "environment": "production",
+        "debug": False,
+        "database_url": "postgresql+psycopg://svc:strong@db.internal:5432/app",
+        "migration_database_url": "postgresql+psycopg://owner:strong@db.internal:5432/app",
+        "jwt_secret": "a-strong-production-secret-value",
+        "cookie_secure": True,
+    }
+
+    with pytest.raises(ValidationError):
+        Settings(**{**base, "jwt_secret": "dev-insecure-jwt-secret-change-me"})
+
+    with pytest.raises(ValidationError):
+        Settings(**{**base, "cookie_secure": False})
