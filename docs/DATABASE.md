@@ -1,9 +1,24 @@
 # Database Design & Tenant Isolation — Profile Analyzer V1
 
-**Status:** Proposed for review. No migration has been generated yet.
+**Status:** M2 identity and institution tables are implemented. Tables for
+platforms, profiles, metrics, scoring, rankings and placement remain proposals
+for their milestones.
 **Source:** `README.md` §8–§12, §15; `docs/IMPLEMENTATION_PLAN.md`.
 **Decision:** PostgreSQL + SQLAlchemy 2.x + Alembic. Shared database, shared
 schema, `college_id` on every tenant-owned row, RLS as defense in depth.
+
+### Implementation status
+
+| Migration | State |
+| --- | --- |
+| `0001_baseline` | Applied. Enables `pgcrypto` (`gen_random_uuid()`). |
+| `0002_identity_institution` | Applied. Creates the M2 tables, constraints and indexes below. |
+| `0003_rls_policies` | Applied. Enables/forces RLS on ten tables and grants the runtime role. |
+
+The SQLAlchemy models live in `backend/app/modules/identity/models.py`,
+`backend/app/modules/institution/models.py` and
+`backend/app/modules/audit/models.py`. The migration sequence for later
+milestones is listed in §7.
 
 ---
 
@@ -87,23 +102,44 @@ fail closed.
 | Role | Purpose | Rights |
 | --- | --- | --- |
 | `profile_owner` | Migration/DDL only | Owns schema, never used by the app |
-| `profile_app` | API and workers | `SELECT/INSERT/UPDATE/DELETE` on mutable tables; `SELECT/INSERT` only on append-only tables; **no** `BYPASSRLS`; not the table owner |
-| `profile_readonly` | Reporting/ops | `SELECT` only |
+| `profile_app` | API and workers | M2 grants below; **no** `BYPASSRLS`; not the table owner |
+| `profile_readonly` | Reporting/ops | `SELECT` only (future) |
+
+M2 grants (`0003_rls_policies`):
+
+```sql
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+  users, user_sessions, user_roles, departments, batches,
+  students, mentors, mentor_batch_assignments
+TO profile_app;
+
+GRANT SELECT, INSERT ON audit_logs TO profile_app;
+GRANT SELECT ON roles TO profile_app;
+GRANT SELECT, INSERT, UPDATE ON colleges TO profile_app;
+
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_logs FROM profile_app;
+REVOKE UPDATE, DELETE, TRUNCATE ON roles FROM profile_app;
+REVOKE DELETE, TRUNCATE ON colleges FROM profile_app;
+```
 
 Because the app role is not the table owner, RLS applies normally. `FORCE` is
-still enabled so a future ownership change cannot silently bypass it.
+still enabled so a future ownership change cannot silently bypass it. The grant
+block is conditional on `profile_app` existing; Compose and CI bootstrap the
+role before migrations run.
 
 ### 2.4 System / cross-tenant operations
 
-Platform super-administration and maintenance jobs are the only cross-tenant
-paths:
+Platform super-administration is the only implemented cross-tenant path:
 
-- A separate `app.is_system = 'true'` setting plus an explicit allow-list of
-  tables with a `*_system` policy.
-- Every system operation must record an `audit_logs` row with
-  `actor_user_id = NULL`, `action`, and the reason.
-- FR-08/§16: super admins do **not** get unrestricted student-data access;
-  system policies exist for provisioning and health checks, not browsing.
+- A separate `app.is_system = 'true'` setting is honoured by the `colleges`
+  policy only. It is used for tenant provisioning and the pre-login college-code
+  lookup.
+- No `users`, student, mentor or audit policy honours the system flag. Platform
+  super admins therefore cannot browse another tenant's student data; they
+  switch tenant context like every other authenticated request.
+- Every system operation records an `audit_logs` row (`actor_user_id` may be
+  `NULL` for platform actions).
+- FR-08/§16: super admins do **not** get unrestricted student-data access.
 
 ### 2.5 Structural protections
 
@@ -120,21 +156,23 @@ alter table batches
   references departments (id, college_id);
 ```
 
-Applied to: `batches→departments`, `students→departments/batches/users`,
-`mentors→users/departments`, `mentor_batch_assignments→mentors/batches`,
-`platform_profiles→students`, and every profile/verification/metric/score child
-table.
+Implemented in M2: `batches→departments`, `students→users/departments/batches`,
+`mentors→users/departments`, `mentor_batch_assignments→mentors/batches/users`,
+`user_sessions→users`, `user_roles→users/roles`, `audit_logs→users/colleges`.
+The same pattern applies to profile, metric, score and ranking child tables in
+later milestones.
 
 ### 2.6 Scoped uniqueness
 
 | Constraint | Definition |
 | --- | --- |
-| `uq_students_register` | `(college_id, register_number)` |
+| `uq_students_register` | `(college_id, lower(register_number))` |
 | `uq_users_email` | `(college_id, lower(institutional_email))` |
-| `uq_platform_profiles_active_claim` | `(college_id, platform_id, normalized_username)` **partial** `WHERE verification_status IN ('PENDING_REVIEW','APPROVED','SUSPENDED')` |
+| `uq_platform_profiles_active_claim` | `(college_id, platform_id, normalized_username)` **partial** `WHERE verification_status IN ('PENDING_REVIEW','APPROVED','SUSPENDED')` *(M3)* |
 | `uq_departments_code` | `(college_id, code)` |
 | `uq_batches_name` | `(college_id, department_id, name)` |
 | `uq_mentor_employee` | `(college_id, employee_code)` |
+| `uq_users_oidc_identity` | `(oidc_issuer, oidc_subject)` **partial** where both are not null |
 
 The partial unique index matters: a rejected or draft profile must not block a
 corrected resubmission with the same username.
@@ -241,10 +279,15 @@ Constraints: `unique (college_id, lower(institutional_email))`,
 | Column | Type | Notes |
 | --- | --- | --- |
 | college_id, user_id | uuid | not null |
-| token_hash | bytea | SHA-256 of opaque session token, unique |
+| token_hash | bytea | SHA-256 of the signed session JWT, unique |
 | issued_at, expires_at, revoked_at | timestamptz | |
-| ip_address | inet | optional, minimized |
-| user_agent | text | optional, minimized |
+| ip_address | inet | optional, minimized; unparseable values are discarded |
+| user_agent | text | optional, minimized (truncated to 512 chars) |
+
+The JWT carries `sub` (user), `col` (college) and `sid` (this row). Resolving a
+session requires a valid signature **and** a non-revoked, unexpired row whose
+hash matches the presented token. `user_sessions` is tenant-owned and protected
+by RLS.
 
 #### `roles` (global)
 `code` unique (`STUDENT`, `MENTOR`, `PLACEMENT_COORDINATOR`, `COLLEGE_ADMIN`,
@@ -455,11 +498,17 @@ Ties share `rank_position` (competition ranking); no unique on rank.
 ### 4.5 Administration
 
 #### `audit_logs`
-`college_id` (nullable for platform-level actions), `actor_user_id`,
-`action varchar(80)`, `entity_type varchar(60)`, `entity_id uuid`,
-`before jsonb`, `after jsonb`, `correlation_id`, `ip_address inet`,
-`user_agent text`, `occurred_at`. Append-only. Index
-`(college_id, occurred_at desc)`, `(entity_type, entity_id)`.
+Implemented shape: `college_id uuid not null`, `actor_user_id uuid` (nullable),
+`action varchar(100)`, `entity_type varchar(100)`, `entity_id uuid`,
+`details jsonb` (default `{}`), `request_id varchar(128)`, `occurred_at`.
+Append-only. Index `(college_id, occurred_at desc)`.
+
+M2 actions: `college.created`, `department.created`, `department.updated`,
+`batch.created`, `mentor.created`, `mentor.assigned`, `user.status_changed`,
+`students.imported`, `student.self_updated`. The runtime role has only
+`SELECT, INSERT` on this table. A proposed `before`/`after` split and IP/user
+agent columns can be added in a later migration if required; they are not part
+of the current schema.
 
 #### `notifications`
 `college_id`, `user_id`, `type varchar(60)`, `title`, `body`, `payload jsonb`,
@@ -501,13 +550,25 @@ Partitioning of `metric_snapshots`, `student_rankings`, and `audit_logs` is
 
 ## 6. Append-only enforcement
 
-Application role grants:
+Current M2 grant:
+
+```sql
+GRANT SELECT, INSERT ON audit_logs TO profile_app;
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_logs FROM profile_app;
+REVOKE UPDATE, DELETE, TRUNCATE ON roles FROM profile_app;
+```
+
+Integration tests assert that `profile_app` can insert and read audit rows but
+cannot update or delete them, and cannot modify the role catalogue.
+
+The same `SELECT, INSERT` pattern will be applied to the later append-only
+tables:
 
 ```sql
 GRANT SELECT, INSERT ON
   profile_submissions, verification_reviews, profile_verification_history,
   sync_logs, metric_snapshots, student_score_history, score_calculation_logs,
-  ranking_snapshots, student_rankings, audit_logs
+  ranking_snapshots, student_rankings
 TO profile_app;
 -- deliberately no UPDATE / DELETE
 ```
@@ -520,20 +581,26 @@ function owned by `profile_owner`, never by `profile_app`.
 
 ## 7. Migration order (Alembic)
 
-1. `0001_extensions` — `pgcrypto`, `citext` (optional), schema `app`.
-2. `0002_tenants_identity` — colleges, users, roles, user_roles, user_sessions.
-3. `0003_institution` — departments, batches, students, mentors, assignments.
-4. `0004_platforms_profiles` — platforms, platform_profiles, submissions,
-   reviews, change requests, verification history.
-5. `0005_metrics_sync` — sync_jobs, sync_logs, platform_metrics,
-   metric_snapshots, platform_raw_data.
-6. `0006_scoring` — configurations, components, scores, history, calc logs.
-7. `0007_rankings` — ranking snapshots, student rankings.
-8. `0008_admin` — audit, notifications, export jobs, settings.
-9. `0009_rls_policies` — enable/force RLS, create policies, create app role
-   grants (separate migration so policies are reviewable in isolation).
-10. `0010_seed_reference` — platforms, roles, platform-default scoring config
-    template (idempotent, no student data).
+Implemented:
+
+1. `0001_baseline` — `pgcrypto` (`gen_random_uuid()`).
+2. `0002_identity_institution` — colleges, users, roles, user_roles,
+   user_sessions, departments, batches, students, mentors,
+   mentor_batch_assignments, audit_logs; reference roles.
+3. `0003_rls_policies` — enable/force RLS, tenant policies, the narrow
+   `colleges` system policy, and `profile_app` grants.
+
+Proposed for later milestones (numbering will follow the implemented history):
+
+4. platforms, platform_profiles, submissions, reviews, change requests,
+   verification history.
+5. sync_jobs, sync_logs, platform_metrics, metric_snapshots, platform_raw_data.
+6. scoring configurations, components, scores, history, calculation logs.
+7. ranking snapshots, student rankings.
+8. notifications, export jobs, settings.
+9. RLS + grants for each new tenant-owned table (kept separate so policies are
+   reviewable in isolation).
+10. Idempotent reference seeds (platforms, scoring template); no student data.
 
 Each migration must pass on an empty database **and** on a seeded database, and
 must be reversible (`downgrade`) or explicitly documented as irreversible.
@@ -542,13 +609,25 @@ must be reversible (`downgrade`) or explicitly documented as irreversible.
 
 ## 8. Verification tests
 
+Implemented in M2 (`backend/tests/integration/test_rls.py`,
+`test_rbac.py`, `test_import.py`):
+
+| Test | Type | Status |
+| --- | --- | --- |
+| Queries with no `app.current_college_id` return zero rows (fail-closed) | integration | ✅ |
+| Setting context to college B never returns college A rows | integration | ✅ |
+| Cross-tenant `INSERT` is rejected by `WITH CHECK` | integration | ✅ |
+| Duplicate `register_number` in same college fails; different college succeeds | integration | ✅ |
+| App role cannot `UPDATE`/`DELETE` an audit row | integration | ✅ |
+| App role cannot modify the `roles` catalogue | integration | ✅ |
+| Tenant context is restored after a commit (no leaked context) | integration | ✅ |
+| `app.is_system` only widens the `colleges` policy | unit + integration | ✅ |
+
+Planned for later milestones:
+
 | Test | Type |
 | --- | --- |
-| Duplicate `register_number` in same college fails; different college succeeds | integration |
 | `students.department_id` from another college is rejected by composite FK | integration |
-| App role cannot `UPDATE` an audit row | security |
-| Queries with no `app.current_college_id` return zero rows | security (RLS fail-closed) |
-| Setting context to college B never returns college A rows | security |
 | Worker task without tenant context raises before querying | integration |
 | Approving a profile twice is idempotent / blocked | workflow |
 | `metric_snapshots` duplicate content hash is suppressed | integration |
@@ -559,9 +638,20 @@ must be reversible (`downgrade`) or explicitly documented as irreversible.
 
 ## 9. Open decisions
 
-- **D3** global platform-account uniqueness → deferred; tenant-scoped only.
-- **D9** batch semantics → store both `start_year` and `end_year`.
-- Whether `college_id` should be `citext`-style textual or UUID FK — proposed UUID.
+Resolved in M2:
+
+- **D3** global platform-account uniqueness → deferred; tenant-scoped only
+  (`UNIQUE (college_id, email)`).
+- **D9** batch semantics → stored as both `start_year` and `end_year`.
+- Tenant key representation → UUID FK everywhere (no `citext` college id).
+- `audit_logs` shape → single `details jsonb` column instead of
+  `before`/`after`; revisit only if a workflow needs structured diffing.
+
+Still open:
+
 - Whether `platform_raw_data` is retained at all in V1 (privacy minimization
   suggests keeping it disabled by default).
-- Partitioning thresholds (deferred).
+- Partitioning thresholds for `metric_snapshots` / `student_rankings` /
+  `audit_logs` (deferred until measured volume warrants it).
+- Whether to add a `BEFORE UPDATE/DELETE` trigger as defense in depth on top of
+  the grant-based append-only enforcement.

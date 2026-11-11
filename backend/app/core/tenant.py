@@ -23,13 +23,20 @@ from app.core.context import (
 
 __all__ = [
     "TenantContextError",
+    "apply_system",
     "apply_tenant",
     "get_tenant_id",
     "require_tenant_id",
+    "system_scope",
     "tenant_scope",
 ]
 
-SET_TENANT_SQL = text("SELECT set_config('app.current_college_id', :college_id, true)")
+SET_TENANT_SQL = text(
+    "SELECT set_config('app.current_college_id', :college_id, true), "
+    "set_config('app.is_system', 'false', true)"
+)
+
+SET_SYSTEM_SQL = text("SELECT set_config('app.is_system', 'true', true)")
 
 
 @contextmanager
@@ -42,6 +49,16 @@ def tenant_scope(college_id: UUID) -> Iterator[UUID]:
         reset_tenant_id(token)
 
 
+@contextmanager
+def system_scope() -> Iterator[None]:
+    """Marker for a deliberate cross-tenant system operation.
+
+    The database flag is set per transaction with :func:`apply_system`; this
+    context only makes the intent explicit in application code.
+    """
+    yield None
+
+
 def apply_tenant(session: Session, college_id: UUID | None = None) -> UUID:
     """Set the transaction-local tenant used by PostgreSQL RLS policies.
 
@@ -52,3 +69,12 @@ def apply_tenant(session: Session, college_id: UUID | None = None) -> UUID:
     resolved = college_id or require_tenant_id()
     session.execute(SET_TENANT_SQL, {"college_id": str(resolved)})
     return resolved
+
+
+def apply_system(session: Session) -> None:
+    """Enable the narrow system policy (college provisioning only).
+
+    System context is set exclusively by server code for allow-listed
+    operations; it is never derived from client input (README §8, DATABASE §2.4).
+    """
+    session.execute(SET_SYSTEM_SQL)
